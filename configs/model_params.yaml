@@ -1,0 +1,4 @@
+algorithm: PPO
+learning_rate: 0.0003
+batch_size: 64
+n_steps: 2048
