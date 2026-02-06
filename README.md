@@ -243,3 +243,55 @@ Train the agent to:
 | DQN | Simple discrete actions |
 | A2C | Fast learning |
 | SAC | Advanced |
+
+## Part 6 — MVP Implementation Checklist
+
+Use this checklist to move from blueprint to code with clear milestones.
+
+### Data + Validation
+- [ ] Choose a primary market and timeframe (ex: EURUSD 5m).
+- [ ] Define session windows (London/NY) and time zone conversions.
+- [ ] Build a data validation script (missing candles, duplicates, bad timestamps).
+
+### Feature Contracts (Minimal Definitions)
+- [ ] **Structure**: swing high/low detection with lookback `n`.
+- [ ] **BOS/MSS**: label breaks and shifts with timestamp and direction.
+- [ ] **Liquidity**: equal highs/lows cluster within tolerance `ε`.
+- [ ] **Order Blocks**: last opposite-color candle before impulse and its range.
+- [ ] **FVG**: detect gaps between candle `i-1` and `i+1`.
+- [ ] **Premium/Discount**: compute 0-50-100 zones from latest swing.
+- [ ] **Session Encoding**: one-hot for kill zones.
+
+### Strategy Baselines (Rule-based)
+- [ ] Encode 1–2 strategies end-to-end with fixed risk rules.
+- [ ] Add a backtest harness that outputs: win rate, expectancy, max DD.
+
+### RL Environment Skeleton
+- [ ] Define observation vector schema with fixed ordering.
+- [ ] Add a simple reward function (R-multiples only).
+- [ ] Implement action masking (no short if already long).
+- [ ] Log trades to a structured ledger (CSV/Parquet).
+
+### Training + Evaluation
+- [ ] Start with a single algorithm (PPO recommended).
+- [ ] Use walk-forward splits (train/validation/test).
+- [ ] Track out-of-sample metrics + stability across regimes.
+
+## Part 7 — Suggested Interfaces (Optional)
+
+These lightweight interface contracts make modules composable:
+
+```text
+features/
+  compute_features(df, config) -> pd.DataFrame
+strategies/
+  generate_signals(features_df, config) -> pd.DataFrame
+environment/
+  class ICTTradingEnv(gym.Env)
+    reset() -> observation
+    step(action) -> observation, reward, done, info
+backtesting/
+  run_backtest(signals_df, prices_df, config) -> metrics
+```
+
+If you want, the next step can be a concrete feature module (BOS/MSS/FVG) with unit tests and a small sample dataset.
