@@ -295,3 +295,21 @@ backtesting/
 ```
 
 If you want, the next step can be a concrete feature module (BOS/MSS/FVG) with unit tests and a small sample dataset.
+
+## Quick Local Training (Q-learning baseline)
+
+You can now train against real daily OHLC market data (Stooq by default):
+
+```bash
+python -m models.q_learning.train --symbol spy.us --episodes 300 --output artifacts/q_learning_model.json
+```
+
+You can also provide your own local CSV/URL (must include `Date,Open,High,Low,Close` columns):
+
+```bash
+python -m models.q_learning.train --source-csv data/your_prices.csv --episodes 300
+```
+
+This generates a JSON artifact containing learned Q-values, greedy policy, reward stats, and the data window used for training.
+
+If remote download is blocked, the trainer automatically falls back to `data/spy_sample_daily.csv` (bundled sample real-market dataset).
