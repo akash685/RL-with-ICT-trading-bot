@@ -258,6 +258,7 @@ Use this checklist to move from blueprint to code with clear milestones.
 - [ ] **BOS/MSS**: label breaks and shifts with timestamp and direction.
 - [ ] **Liquidity**: equal highs/lows cluster within tolerance `ε`.
 - [ ] **Order Blocks**: last opposite-color candle before impulse and its range.
+
 - [ ] **FVG**: detect gaps between candle `i-1` and `i+1`.
 - [ ] **Premium/Discount**: compute 0-50-100 zones from latest swing.
 - [ ] **Session Encoding**: one-hot for kill zones.
@@ -276,6 +277,33 @@ Use this checklist to move from blueprint to code with clear milestones.
 - [ ] Start with a single algorithm (PPO recommended).
 - [ ] Use walk-forward splits (train/validation/test).
 - [ ] Track out-of-sample metrics + stability across regimes.
+
+## BTCUSD Multi-Timeframe Model: Practical Improvement Path
+
+To improve reliability (and avoid over-optimistic in-sample metrics), use a walk-forward style run with trading frictions:
+
+1. Build features on all requested timeframes (`1w,1d,4hr,2hr,1hr,30min,15min,5min`).
+2. Split data chronologically into train/test (`--train-ratio`, default `0.7`).
+3. Calibrate a signal threshold on the train slice only.
+4. Evaluate both train and test with fees/slippage enabled.
+
+Run:
+
+```bash
+python -m models.multitimeframe.btc_mtf_pipeline \
+  --source-csv data/btcusd_5min_sample.csv \
+  --train-ratio 0.7 \
+  --fee-bps 6 \
+  --slippage-bps 2 \
+  --output-features artifacts/btcusd_mtf_features.csv \
+  --output-metrics artifacts/btcusd_mtf_metrics.json
+```
+
+The metrics JSON now includes:
+- `data_rows`, `train_rows`, `test_rows`
+- nested `train` and `test` metrics
+- calibrated `signal_threshold`
+- explicit friction assumptions (`fee_bps`, `slippage_bps`)
 
 ## Part 7 — Suggested Interfaces (Optional)
 
@@ -298,10 +326,38 @@ If you want, the next step can be a concrete feature module (BOS/MSS/FVG) with u
 
 ## Quick Local Training (Q-learning baseline)
 
-You can now run a lightweight local training loop without external RL libraries:
+You can now train against real daily OHLC market data (Stooq by default):
 
 ```bash
-python -m models.q_learning.train --episodes 300 --output artifacts/q_learning_model.json
+python -m models.q_learning.train --symbol spy.us --episodes 300 --output artifacts/q_learning_model.json
 ```
 
-This generates a JSON artifact containing the learned Q-table, summary rewards, and a greedy policy mapping.
+You can also provide your own local CSV/URL (must include `Date,Open,High,Low,Close` columns):
+
+```bash
+python -m models.q_learning.train --source-csv data/your_prices.csv --episodes 300
+```
+
+This generates a JSON artifact containing learned Q-values, greedy policy, reward stats, and the data window used for training.
+
+If remote download is blocked, the trainer automatically falls back to `data/spy_sample_daily.csv` (bundled sample real-market dataset).
+
+## BTCUSD Multi-Timeframe Trading Model (1W/1D/4H/2H/1H/30m/15m/5m)
+
+Build the same feature stack on all requested timeframes and execute a combined trade model on 5-minute bars:
+
+```bash
+python -m models.multitimeframe.btc_mtf_pipeline \
+  --source-csv data/btcusd_5min_sample.csv \
+  --output-features artifacts/btcusd_mtf_features.csv \
+  --output-metrics artifacts/btcusd_mtf_metrics.json
+```
+
+Input CSV must contain columns:
+- `timestamp`, `open`, `high`, `low`, `close`, `volume`
+
+The pipeline:
+1. Resamples BTCUSD 5m data into `1w, 1d, 4hr, 2hr, 1hr, 30min, 15min, 5min`.
+2. Runs the same features on each timeframe (market structure, liquidity, order blocks, FVG, premium/discount, sessions, SMT divergence, indicators).
+3. Builds per-timeframe directional signals and combines them with higher-timeframe weighting.
+4. Executes trades on 5-minute bars and writes summary execution metrics.
