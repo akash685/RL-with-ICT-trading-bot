@@ -313,3 +313,23 @@ python -m models.q_learning.train --source-csv data/your_prices.csv --episodes 3
 This generates a JSON artifact containing learned Q-values, greedy policy, reward stats, and the data window used for training.
 
 If remote download is blocked, the trainer automatically falls back to `data/spy_sample_daily.csv` (bundled sample real-market dataset).
+
+## BTCUSD Multi-Timeframe Trading Model (1W/1D/4H/2H/1H/30m/15m/5m)
+
+Build the same feature stack on all requested timeframes and execute a combined trade model on 5-minute bars:
+
+```bash
+python -m models.multitimeframe.btc_mtf_pipeline \
+  --source-csv data/btcusd_5min_sample.csv \
+  --output-features artifacts/btcusd_mtf_features.csv \
+  --output-metrics artifacts/btcusd_mtf_metrics.json
+```
+
+Input CSV must contain columns:
+- `timestamp`, `open`, `high`, `low`, `close`, `volume`
+
+The pipeline:
+1. Resamples BTCUSD 5m data into `1w, 1d, 4hr, 2hr, 1hr, 30min, 15min, 5min`.
+2. Runs the same features on each timeframe (market structure, liquidity, order blocks, FVG, premium/discount, sessions, SMT divergence, indicators).
+3. Builds per-timeframe directional signals and combines them with higher-timeframe weighting.
+4. Executes trades on 5-minute bars and writes summary execution metrics.
