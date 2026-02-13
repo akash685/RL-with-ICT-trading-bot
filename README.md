@@ -295,3 +295,13 @@ backtesting/
 ```
 
 If you want, the next step can be a concrete feature module (BOS/MSS/FVG) with unit tests and a small sample dataset.
+
+## Quick Local Training (Q-learning baseline)
+
+You can now run a lightweight local training loop without external RL libraries:
+
+```bash
+python -m models.q_learning.train --episodes 300 --output artifacts/q_learning_model.json
+```
+
+This generates a JSON artifact containing the learned Q-table, summary rewards, and a greedy policy mapping.
