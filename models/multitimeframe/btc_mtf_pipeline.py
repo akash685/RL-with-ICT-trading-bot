@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -131,20 +131,57 @@ def merge_timeframes(tf_features: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     for c in signal_cols:
         weighted_sum += base[c].to_numpy() * weight_map.get(c, 1.0)
 
+    base["signal_score"] = weighted_sum
     base["combined_signal"] = np.where(weighted_sum > 0, 1, np.where(weighted_sum < 0, -1, 0))
     return base
 
 
-def execute_trade_model(merged: pd.DataFrame) -> Dict[str, float]:
-    """Run a simple execution model on merged multi-timeframe signal."""
+def split_train_test(merged: pd.DataFrame, train_ratio: float = 0.7) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Time-based train/test split for walk-forward evaluation."""
+    if not 0.5 <= train_ratio <= 0.9:
+        raise ValueError("train_ratio must be between 0.5 and 0.9")
+
+    split_idx = int(len(merged) * train_ratio)
+    train = merged.iloc[:split_idx].copy()
+    test = merged.iloc[split_idx:].copy()
+    if train.empty or test.empty:
+        raise ValueError("Not enough rows after train/test split")
+    return train, test
+
+
+def tune_signal_threshold(train: pd.DataFrame, candidates: Tuple[float, ...] = (0.0, 2.0, 4.0, 6.0)) -> float:
+    """Pick a threshold on absolute signal score using train-only data."""
+    best_threshold = 0.0
+    best_reward = -np.inf
+    for threshold in candidates:
+        candidate_signal = np.where(train["signal_score"] > threshold, 1, np.where(train["signal_score"] < -threshold, -1, 0))
+        close = train["close_5min"].to_numpy(dtype=float)
+        returns = np.zeros_like(close)
+        returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-9)
+        strategy_returns = np.zeros_like(close)
+        strategy_returns[1:] = candidate_signal[:-1] * returns[1:]
+        reward = float(np.mean(strategy_returns))
+        if reward > best_reward:
+            best_reward = reward
+            best_threshold = threshold
+    return float(best_threshold)
+
+
+def execute_trade_model(merged: pd.DataFrame, *, threshold: float = 0.0, fee_bps: float = 6.0, slippage_bps: float = 2.0) -> Dict[str, float]:
+    """Run execution model with friction-aware returns and thresholded signal."""
     close = merged["close_5min"].to_numpy(dtype=float)
-    signal = merged["combined_signal"].to_numpy(dtype=float)
+    raw_score = merged["signal_score"].to_numpy(dtype=float)
+    signal = np.where(raw_score > threshold, 1, np.where(raw_score < -threshold, -1, 0)).astype(float)
 
     returns = np.zeros_like(close)
     returns[1:] = (close[1:] - close[:-1]) / np.maximum(close[:-1], 1e-9)
 
     strategy_returns = np.zeros_like(close)
     strategy_returns[1:] = signal[:-1] * returns[1:]
+
+    turnover = np.abs(np.diff(signal, prepend=signal[0]))
+    cost_per_turnover = (fee_bps + slippage_bps) / 10000.0
+    strategy_returns -= turnover * cost_per_turnover
 
     equity = np.cumprod(1.0 + strategy_returns)
     peak = np.maximum.accumulate(equity)
@@ -156,6 +193,9 @@ def execute_trade_model(merged: pd.DataFrame) -> Dict[str, float]:
     return {
         "bars": float(len(merged)),
         "trades": float(trades),
+        "signal_threshold": float(threshold),
+        "fee_bps": float(fee_bps),
+        "slippage_bps": float(slippage_bps),
         "total_return_pct": float((equity[-1] - 1.0) * 100),
         "avg_bar_return_pct": float(np.mean(strategy_returns) * 100),
         "win_rate": float(win_rate),
@@ -163,7 +203,14 @@ def execute_trade_model(merged: pd.DataFrame) -> Dict[str, float]:
     }
 
 
-def run_pipeline(source_csv: str | None, output_features: Path, output_metrics: Path) -> None:
+def run_pipeline(
+    source_csv: str | None,
+    output_features: Path,
+    output_metrics: Path,
+    train_ratio: float,
+    fee_bps: float,
+    slippage_bps: float,
+) -> None:
     config: Dict[str, Any] = {}
     df_5m = load_btcusd_5min(source_csv)
 
@@ -173,7 +220,19 @@ def run_pipeline(source_csv: str | None, output_features: Path, output_metrics: 
         tf_features[name] = build_features(rs, config)
 
     merged = merge_timeframes(tf_features)
-    metrics = execute_trade_model(merged)
+    train_df, test_df = split_train_test(merged, train_ratio=train_ratio)
+    threshold = tune_signal_threshold(train_df)
+
+    train_metrics = execute_trade_model(train_df, threshold=threshold, fee_bps=fee_bps, slippage_bps=slippage_bps)
+    test_metrics = execute_trade_model(test_df, threshold=threshold, fee_bps=fee_bps, slippage_bps=slippage_bps)
+
+    metrics = {
+        "data_rows": float(len(merged)),
+        "train_rows": float(len(train_df)),
+        "test_rows": float(len(test_df)),
+        "train": train_metrics,
+        "test": test_metrics,
+    }
 
     output_features.parent.mkdir(parents=True, exist_ok=True)
     output_metrics.parent.mkdir(parents=True, exist_ok=True)
@@ -191,9 +250,19 @@ def main() -> None:
     parser.add_argument("--source-csv", default=None, help="BTCUSD 5-minute CSV path with timestamp/open/high/low/close/volume")
     parser.add_argument("--output-features", type=Path, default=Path("artifacts/btcusd_mtf_features.csv"))
     parser.add_argument("--output-metrics", type=Path, default=Path("artifacts/btcusd_mtf_metrics.json"))
+    parser.add_argument("--train-ratio", type=float, default=0.7, help="Time-based train split ratio (default 0.7)")
+    parser.add_argument("--fee-bps", type=float, default=6.0, help="Estimated fee in basis points per position change")
+    parser.add_argument("--slippage-bps", type=float, default=2.0, help="Estimated slippage in basis points per position change")
     args = parser.parse_args()
 
-    run_pipeline(args.source_csv, args.output_features, args.output_metrics)
+    run_pipeline(
+        args.source_csv,
+        args.output_features,
+        args.output_metrics,
+        train_ratio=args.train_ratio,
+        fee_bps=args.fee_bps,
+        slippage_bps=args.slippage_bps,
+    )
 
 
 if __name__ == "__main__":

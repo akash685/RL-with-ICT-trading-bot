@@ -258,6 +258,7 @@ Use this checklist to move from blueprint to code with clear milestones.
 - [ ] **BOS/MSS**: label breaks and shifts with timestamp and direction.
 - [ ] **Liquidity**: equal highs/lows cluster within tolerance `ε`.
 - [ ] **Order Blocks**: last opposite-color candle before impulse and its range.
+
 - [ ] **FVG**: detect gaps between candle `i-1` and `i+1`.
 - [ ] **Premium/Discount**: compute 0-50-100 zones from latest swing.
 - [ ] **Session Encoding**: one-hot for kill zones.
@@ -276,6 +277,33 @@ Use this checklist to move from blueprint to code with clear milestones.
 - [ ] Start with a single algorithm (PPO recommended).
 - [ ] Use walk-forward splits (train/validation/test).
 - [ ] Track out-of-sample metrics + stability across regimes.
+
+## BTCUSD Multi-Timeframe Model: Practical Improvement Path
+
+To improve reliability (and avoid over-optimistic in-sample metrics), use a walk-forward style run with trading frictions:
+
+1. Build features on all requested timeframes (`1w,1d,4hr,2hr,1hr,30min,15min,5min`).
+2. Split data chronologically into train/test (`--train-ratio`, default `0.7`).
+3. Calibrate a signal threshold on the train slice only.
+4. Evaluate both train and test with fees/slippage enabled.
+
+Run:
+
+```bash
+python -m models.multitimeframe.btc_mtf_pipeline \
+  --source-csv data/btcusd_5min_sample.csv \
+  --train-ratio 0.7 \
+  --fee-bps 6 \
+  --slippage-bps 2 \
+  --output-features artifacts/btcusd_mtf_features.csv \
+  --output-metrics artifacts/btcusd_mtf_metrics.json
+```
+
+The metrics JSON now includes:
+- `data_rows`, `train_rows`, `test_rows`
+- nested `train` and `test` metrics
+- calibrated `signal_threshold`
+- explicit friction assumptions (`fee_bps`, `slippage_bps`)
 
 ## Part 7 — Suggested Interfaces (Optional)
 
